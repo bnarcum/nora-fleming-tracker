@@ -1,0 +1,58 @@
+name: Refresh catalog
+
+on:
+  # Daily at 12:00 UTC (around 7-8am US Eastern). Cron syntax: minute hour dom month dow.
+  schedule:
+    - cron: "0 12 * * *"
+  # Manual trigger for ad-hoc refreshes.
+  workflow_dispatch:
+
+# Avoid two refreshes overlapping if the run is slow.
+concurrency:
+  group: refresh-catalog
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Use the default GITHUB_TOKEN with contents:write so we can push back to main.
+          # Standard token configuration; no extra credentials needed.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Rebuild catalog
+        run: npm run catalog:build
+
+      - name: Commit changes (if any)
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Only stage the catalog artifacts so unrelated local changes never get committed.
+          git add data/catalog.json data/conflicts.json
+
+          if git diff --staged --quiet; then
+            echo "No catalog changes; skipping commit."
+            exit 0
+          fi
+
+          STAMP=$(date -u +%Y-%m-%d)
+          git commit -m "chore(catalog): daily refresh ${STAMP}"
+          git push
